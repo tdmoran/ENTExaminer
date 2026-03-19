@@ -1,10 +1,11 @@
-import XCTest
+import Testing
 @testable import ENTExaminer
 
-final class FlowControllerTests: XCTestCase {
-    private let flowController = FlowController()
+@Suite("FlowController")
+struct FlowControllerTests {
+    let flowController = FlowController()
 
-    private let sampleAnalysis = DocumentAnalysis(
+    let sampleAnalysis = DocumentAnalysis(
         topics: [
             ExamTopic(name: "Photosynthesis", importance: 0.9, keyConcepts: ["chlorophyll", "light reactions"], difficulty: .intermediate, subtopics: ["Calvin cycle", "Electron transport"]),
             ExamTopic(name: "Cell Respiration", importance: 0.8, keyConcepts: ["mitochondria", "ATP"], difficulty: .intermediate, subtopics: ["Glycolysis", "Krebs cycle"]),
@@ -16,7 +17,8 @@ final class FlowControllerTests: XCTestCase {
         difficultyAssessment: "intermediate"
     )
 
-    func testFirstQuestionStartsWithMostImportantTopic() {
+    @Test("First question targets the most important topic at foundational level")
+    func firstQuestionStartsWithMostImportantTopic() {
         let action = flowController.decideNextAction(
             analysis: sampleAnalysis,
             completedTurns: [],
@@ -25,30 +27,17 @@ final class FlowControllerTests: XCTestCase {
         )
 
         if case .askQuestion(let topic, let difficulty, _) = action {
-            XCTAssertEqual(topic.name, "Photosynthesis")
-            XCTAssertEqual(difficulty, .foundational)
+            #expect(topic.name == "Photosynthesis")
+            #expect(difficulty == .foundational)
         } else {
-            XCTFail("Expected askQuestion, got \(action)")
+            Issue.record("Expected askQuestion, got \(action)")
         }
     }
 
-    func testWrapsUpAtMaxQuestions() {
+    @Test("Wraps up when max questions reached")
+    func wrapsUpAtMaxQuestions() {
         let turns = (0..<10).map { index in
-            ExamTurn(
-                questionIndex: index,
-                topic: sampleAnalysis.topics[0],
-                question: "Question \(index)",
-                userAnswer: "Answer \(index)",
-                evaluation: TurnEvaluation(
-                    correctnessScore: 0.8,
-                    completenessScore: 0.7,
-                    clarityScore: 0.9,
-                    keyPointsCovered: ["point"],
-                    keyPointsMissed: [],
-                    feedback: "Good",
-                    followUpSuggestion: .moveToNextTopic
-                )
-            )
+            makeTurn(index: index, topic: sampleAnalysis.topics[0], score: 0.8)
         }
 
         let action = flowController.decideNextAction(
@@ -58,10 +47,11 @@ final class FlowControllerTests: XCTestCase {
             maxQuestions: 10
         )
 
-        XCTAssertEqual(action, .wrapUp)
+        #expect(action == .wrapUp)
     }
 
-    func testMovesToNextTopicAfterHighMastery() {
+    @Test("Transitions to next topic after high mastery")
+    func movesToNextTopicAfterHighMastery() {
         let turns = [
             makeTurn(index: 0, topic: sampleAnalysis.topics[0], score: 0.9),
             makeTurn(index: 1, topic: sampleAnalysis.topics[0], score: 0.9),
@@ -80,16 +70,68 @@ final class FlowControllerTests: XCTestCase {
         )
 
         if case .transitionTopic(let from, let to) = action {
-            XCTAssertEqual(from.name, "Photosynthesis")
-            XCTAssertEqual(to.name, "Cell Respiration")
+            #expect(from.name == "Photosynthesis")
+            #expect(to.name == "Cell Respiration")
         } else {
-            XCTFail("Expected transitionTopic, got \(action)")
+            Issue.record("Expected transitionTopic, got \(action)")
+        }
+    }
+
+    @Test("Escalates difficulty when mastery is high but within same topic")
+    func escalatesDifficultyOnHighMastery() {
+        let turns = [
+            makeTurn(index: 0, topic: sampleAnalysis.topics[0], score: 0.85),
+        ]
+
+        let topicScores = [
+            TopicScore(topicName: "Photosynthesis", mastery: 0.85, questionsAsked: 1, questionsCorrect: 1, trend: .stable)
+        ]
+
+        let action = flowController.decideNextAction(
+            analysis: sampleAnalysis,
+            completedTurns: turns,
+            topicScores: topicScores,
+            maxQuestions: 10
+        )
+
+        // With only 1 question asked (< 3), should stay on topic but at advanced difficulty
+        if case .askQuestion(let topic, let difficulty, _) = action {
+            #expect(topic.name == "Photosynthesis")
+            #expect(difficulty == .advanced)
+        } else {
+            Issue.record("Expected askQuestion, got \(action)")
+        }
+    }
+
+    @Test("Reduces difficulty when mastery is low")
+    func reducesDifficultyOnLowMastery() {
+        let turns = [
+            makeTurn(index: 0, topic: sampleAnalysis.topics[0], score: 0.2),
+        ]
+
+        let topicScores = [
+            TopicScore(topicName: "Photosynthesis", mastery: 0.2, questionsAsked: 1, questionsCorrect: 0, trend: .declining)
+        ]
+
+        let action = flowController.decideNextAction(
+            analysis: sampleAnalysis,
+            completedTurns: turns,
+            topicScores: topicScores,
+            maxQuestions: 10
+        )
+
+        if case .askQuestion(_, let difficulty, _) = action {
+            #expect(difficulty == .foundational)
+        } else if case .clarifyMisunderstanding = action {
+            // Also acceptable — the FlowController may choose to clarify
+        } else {
+            Issue.record("Expected askQuestion or clarify, got \(action)")
         }
     }
 
     // MARK: - Helpers
 
-    private func makeTurn(index: Int, topic: ExamTopic, score: Double) -> ExamTurn {
+    func makeTurn(index: Int, topic: ExamTopic, score: Double) -> ExamTurn {
         ExamTurn(
             questionIndex: index,
             topic: topic,
