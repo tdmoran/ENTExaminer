@@ -52,6 +52,9 @@ final class ExaminationSessionState {
 actor ExaminationEngine {
     private let state: ExaminationSessionState
     private let claudeClient: ClaudeAPIClient
+    private let ttsService: TTSService
+    private let sttService: STTService
+    private let pipelinedSpeaker: PipelinedSpeaker
     private let flowController: FlowController
     private let performanceCalculator: PerformanceCalculator
     private let document: ParsedDocument
@@ -66,12 +69,17 @@ actor ExaminationEngine {
     init(
         state: ExaminationSessionState,
         claudeClient: ClaudeAPIClient,
+        ttsService: TTSService,
+        sttService: STTService,
         document: ParsedDocument,
         analysis: DocumentAnalysis,
         config: ExamConfiguration
     ) {
         self.state = state
         self.claudeClient = claudeClient
+        self.ttsService = ttsService
+        self.sttService = sttService
+        self.pipelinedSpeaker = PipelinedSpeaker(ttsService: ttsService, voiceId: config.voiceId ?? "default")
         self.flowController = FlowController()
         self.performanceCalculator = PerformanceCalculator()
         self.document = document
@@ -123,6 +131,8 @@ actor ExaminationEngine {
 
     func stop() async {
         timerTask?.cancel()
+        await ttsService.stopSpeaking()
+        await sttService.stopListening()
         await state.update(status: .finished)
     }
 
@@ -147,25 +157,56 @@ actor ExaminationEngine {
 
         await state.update(currentTopic: .some(topic), status: .askingQuestion)
 
-        // Generate question via Claude streaming
-        let question = try await generateQuestion(prompt: questionPrompt)
-        await state.update(currentQuestion: .some(question))
+        // Generate question stream via Claude and pipe through TTS sentence-by-sentence
+        let stream = generateQuestionStream(prompt: questionPrompt)
 
-        // Speak the question (text-to-speech placeholder)
-        await state.update(isSpeaking: true)
-        // TTS integration point — ElevenLabs will speak the question
-        try await Task.sleep(for: .milliseconds(500)) // Placeholder for TTS
-        await state.update(isSpeaking: false)
+        let capturedState = state
 
-        // Listen for user answer
-        await state.update(status: .listeningForAnswer, isListening: true)
-        // STT integration point — capture and transcribe user speech
-        // For now, simulate waiting for user input
-        let userAnswer = await waitForUserAnswer()
-        await state.update(isListening: false)
+        await capturedState.update(isSpeaking: true)
+
+        let question = try await pipelinedSpeaker.speakStream(
+            stream,
+            onAudioLevel: { @Sendable level in
+                Task { @MainActor in
+                    let levels = Self.buildLevelsArray(from: level)
+                    capturedState.update(examinerAudioLevels: levels)
+                }
+            }
+        )
+
+        await capturedState.update(isSpeaking: false, currentQuestion: .some(question))
+
+        // Record the assistant message in conversation history
+        let userMessage = ClaudeMessage(
+            role: .user,
+            content: [.text(questionPrompt)]
+        )
+        conversationHistory = conversationHistory + [
+            userMessage,
+            ClaudeMessage(role: .assistant, content: [.text(question)])
+        ]
+
+        // Listen for user answer via STT
+        await capturedState.update(status: .listeningForAnswer, isListening: true)
+
+        let userAnswer = try await sttService.listen(
+            onPartialTranscript: { @Sendable partial in
+                Task { @MainActor in
+                    capturedState.update(userTranscript: partial)
+                }
+            },
+            onAudioLevel: { @Sendable level in
+                Task { @MainActor in
+                    let levels = Self.buildLevelsArray(from: level)
+                    capturedState.update(userAudioLevels: levels)
+                }
+            }
+        )
+
+        await capturedState.update(isListening: false, userTranscript: userAnswer)
 
         // Evaluate the answer
-        await state.update(status: .evaluatingAnswer)
+        await capturedState.update(status: .evaluatingAnswer)
         let evaluation = try await evaluateAnswer(question: question, answer: userAnswer, topic: topic)
 
         // Record the turn
@@ -184,7 +225,7 @@ actor ExaminationEngine {
             analysis: analysis,
             maxQuestions: config.maxQuestions
         )
-        await state.update(turns: allTurns, performance: performance, status: .transitioning)
+        await capturedState.update(turns: allTurns, performance: performance, status: .transitioning)
 
         // Brief pause between turns
         try await Task.sleep(for: .milliseconds(800))
@@ -231,7 +272,11 @@ actor ExaminationEngine {
         }
     }
 
-    private func generateQuestion(prompt: String) async throws -> String {
+    /// Returns the Claude streaming response as an `AsyncThrowingStream` so that
+    /// `PipelinedSpeaker` can consume text deltas sentence-by-sentence for TTS.
+    private func generateQuestionStream(
+        prompt: String
+    ) -> AsyncThrowingStream<ClaudeStreamEvent, Error> {
         let systemPrompt = buildSystemPrompt()
 
         let userMessage = ClaudeMessage(
@@ -239,27 +284,12 @@ actor ExaminationEngine {
             content: [.text(prompt)]
         )
 
-        var questionText = ""
-        let stream = claudeClient.stream(
+        return claudeClient.stream(
             model: config.model,
             system: systemPrompt,
             messages: conversationHistory + [userMessage],
             maxTokens: 512
         )
-
-        for try await event in stream {
-            if case .textDelta(let delta) = event {
-                questionText += delta
-            }
-        }
-
-        // Add to conversation history
-        conversationHistory = conversationHistory + [
-            userMessage,
-            ClaudeMessage(role: .assistant, content: [.text(questionText)])
-        ]
-
-        return questionText
     }
 
     private func evaluateAnswer(question: String, answer: String, topic: ExamTopic) async throws -> TurnEvaluation {
@@ -312,12 +342,6 @@ actor ExaminationEngine {
         return try JSONDecoder().decode(TurnEvaluation.self, from: cleanData)
     }
 
-    private func waitForUserAnswer() async -> String {
-        // Placeholder — will be replaced with actual STT from ElevenLabs
-        // In the real implementation, this waits for the voice agent to provide a transcript
-        await state.userTranscript
-    }
-
     private func buildSystemPrompt() -> String {
         """
         You are an expert document examiner conducting a spoken oral examination. \
@@ -345,6 +369,19 @@ actor ExaminationEngine {
                 let elapsed = Date().timeIntervalSince(self.startTime ?? Date())
                 await state.update(elapsedTime: elapsed)
             }
+        }
+    }
+
+    /// Builds a 32-element audio level array from a single scalar level value.
+    /// The scalar is distributed across bands with slight variation to produce
+    /// a natural-looking waveform visualization.
+    private static func buildLevelsArray(from level: Float) -> [Float] {
+        let bandCount = 32
+        let clamped = max(0, min(1, level))
+        return (0..<bandCount).map { band in
+            // Slight sinusoidal variation per band for a natural waveform look
+            let variation = Float(sin(Double(band) * 0.4)) * 0.15
+            return max(0, min(1, clamped + variation * clamped))
         }
     }
 }

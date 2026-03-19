@@ -21,6 +21,7 @@ final class AppState {
 
     // Services
     private let documentParser = CompositeDocumentParser()
+    private let audioPipeline = AudioPipeline()
     private var documentAnalyzer: DocumentAnalyzer?
     private var examinationEngine: ExaminationEngine?
 
@@ -97,9 +98,20 @@ final class AppState {
             voiceId: selectedVoiceId
         )
 
+        let ttsService = ElevenLabsTTSService(
+            apiKeyProvider: { @Sendable in
+                try? await KeychainManager.shared.retrieve(account: KeychainManager.elevenLabsAccount)
+            },
+            audioPipeline: audioPipeline
+        )
+
+        let sttService = AppleSpeechSTTService()
+
         let engine = ExaminationEngine(
             state: sessionState,
             claudeClient: makeClaudeClient(),
+            ttsService: ttsService,
+            sttService: sttService,
             document: document,
             analysis: analysis,
             config: config

@@ -24,6 +24,11 @@ enum AppError: LocalizedError, Equatable {
     case audioEngineFailure(String)
     case noAudioInputDevice
 
+    // Speech recognition errors
+    case speechRecognitionDenied
+    case speechRecognitionUnavailable(String)
+    case speechRecognitionFailed(String)
+
     // Examination errors
     case examinationInterrupted(reason: String)
     case evaluationFailed(turnIndex: Int)
@@ -54,6 +59,12 @@ enum AppError: LocalizedError, Equatable {
             return "Audio system error: \(detail)"
         case .noAudioInputDevice:
             return "No microphone found. Please connect a microphone."
+        case .speechRecognitionDenied:
+            return "Speech recognition access is required for voice examination."
+        case .speechRecognitionUnavailable(let detail):
+            return "Speech recognition is not available: \(detail)"
+        case .speechRecognitionFailed(let detail):
+            return "Speech recognition failed: \(detail)"
         case .examinationInterrupted(let reason):
             return "Examination interrupted: \(reason)"
         case .evaluationFailed(let turn):
@@ -87,6 +98,12 @@ enum AppError: LocalizedError, Equatable {
             return "Try restarting the application."
         case .noAudioInputDevice:
             return "Connect a microphone or headset and try again."
+        case .speechRecognitionDenied:
+            return "Open System Settings > Privacy & Security > Speech Recognition and enable access for ENTExaminer."
+        case .speechRecognitionUnavailable:
+            return "Check that your device supports speech recognition and that the correct language is installed."
+        case .speechRecognitionFailed:
+            return "Try speaking again or check your microphone connection."
         case .examinationInterrupted:
             return "You can resume from where you left off."
         case .evaluationFailed:
