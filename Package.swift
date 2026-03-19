@@ -13,15 +13,20 @@ let package = Package(
             path: "ENTExaminer",
             exclude: [
                 "Resources/Assets.xcassets",
+                "Resources/AppIcon.icns",
                 "ENTExaminer.entitlements",
             ],
             swiftSettings: [
                 .enableExperimentalFeature("StrictConcurrency"),
             ]
         ),
-        .executableTarget(
+        .testTarget(
             name: "ENTExaminerTests",
-            path: "Tests"
+            dependencies: ["ENTExaminer"],
+            path: "ENTExaminerTests",
+            swiftSettings: [
+                .enableExperimentalFeature("StrictConcurrency"),
+            ]
         ),
     ]
 )
