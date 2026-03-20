@@ -53,6 +53,7 @@ actor ElevenLabsTTSService: TTSService {
         cancelActiveStream()
 
         // Ensure audio engine is running for playback
+        NSLog("[ElevenLabsTTS] speak() called with text: %@", String(text.prefix(60)))
         try await audioPipeline.startPlayback()
 
         let apiKey = try await requireAPIKey()

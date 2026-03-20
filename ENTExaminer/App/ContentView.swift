@@ -6,13 +6,20 @@ struct ContentView: View {
     var body: some View {
         @Bindable var state = appState
 
-        NavigationSplitView {
-            SidebarView()
-        } detail: {
-            detailView
+        ZStack {
+            NavigationSplitView {
+                SidebarView()
+            } detail: {
+                detailView
+            }
+            .navigationSplitViewStyle(.balanced)
+
+            if case .ingesting = appState.currentPhase {
+                ProgressOverlayView()
+            } else if case .analyzing = appState.currentPhase {
+                ProgressOverlayView()
+            }
         }
-        .overlay { ProgressOverlayView() }
-        .navigationSplitViewStyle(.balanced)
         .toolbar {
             ToolbarItemGroup(placement: .primaryAction) {
                 toolbarContent
@@ -131,6 +138,16 @@ struct ContentView: View {
                     .symbolRenderingMode(.hierarchical)
                     .foregroundStyle(.red)
             }
+        }
+
+        Button {
+            Task {
+                if let randomCase = CaseBank.randomCase() {
+                    await appState.startCaseExamination(randomCase)
+                }
+            }
+        } label: {
+            Label("Quick Start", systemImage: "play.fill")
         }
 
         Button {

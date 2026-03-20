@@ -167,6 +167,23 @@ actor AudioPipeline {
         logger.info("Audio engine started in playback-only mode")
     }
 
+    /// Stops the audio engine when it was started in playback-only mode.
+    /// Safe to call even if the engine is not running.
+    func stopPlayback() {
+        guard let engine, engine.isRunning else { return }
+        // Don't stop if we're in capture mode — stopCapture handles that
+        guard !isCapturing else { return }
+
+        playbackPlayerNode?.stop()
+        engine.stop()
+
+        self.engine = nil
+        self.playbackMixerNode = nil
+        self.playbackPlayerNode = nil
+
+        logger.info("Audio engine stopped (playback-only mode)")
+    }
+
     // MARK: - Capture Control
 
     func startCapture() async throws {

@@ -155,6 +155,7 @@ actor ExaminationEngine {
     /// Instead of rigid question→answer→evaluate cycles, this creates a flowing
     /// conversation where the examiner responds to what the trainee actually says.
     func startConversation() async throws {
+        NSLog("[ExamEngine] startConversation called with model: %@", self.config.model.rawValue)
         logger.info("Starting conversational examination with \(self.config.model.displayName)")
 
         startTime = Date()
@@ -740,6 +741,7 @@ actor ExaminationEngine {
 
     private func speakIntroduction() async throws {
         let intro = "Welcome to your examination on \(analysis.documentSummary)."
+        NSLog("[ExamEngine] speakIntroduction: %@", String(intro.prefix(80)))
 
         let capturedState = state
         await capturedState.update(currentQuestion: .some(intro), isSpeaking: true)

@@ -27,6 +27,7 @@ struct ProgressOverlayView: View {
             }
         }
         .animation(.easeInOut(duration: 0.3), value: isVisible)
+        .allowsHitTesting(isVisible)
     }
 
     private var isVisible: Bool {

@@ -4,6 +4,22 @@ import OSLog
 
 private let logger = Logger(subsystem: "com.examiner", category: "AppState")
 
+private func debugLog(_ message: String) {
+    let url = FileManager.default.temporaryDirectory.appendingPathComponent("entexaminer_debug.log")
+    let line = "\(Date()): \(message)\n"
+    if let data = line.data(using: .utf8) {
+        if FileManager.default.fileExists(atPath: url.path) {
+            if let handle = try? FileHandle(forWritingTo: url) {
+                handle.seekToEndOfFile()
+                handle.write(data)
+                handle.closeFile()
+            }
+        } else {
+            try? data.write(to: url)
+        }
+    }
+}
+
 @MainActor
 @Observable
 final class AppState {
@@ -41,8 +57,10 @@ final class AppState {
         Task {
             let hasAnthropicKey = await KeychainManager.shared.hasKey(account: KeychainManager.anthropicAccount)
             let hasElevenLabsKey = await KeychainManager.shared.hasKey(account: KeychainManager.elevenLabsAccount)
+            debugLog("init: hasAnthropicKey=\(hasAnthropicKey), hasElevenLabsKey=\(hasElevenLabsKey)")
             if !hasAnthropicKey || !hasElevenLabsKey {
                 showOnboarding = true
+                debugLog("init: showing onboarding")
             }
 
             // Load persisted library
@@ -68,7 +86,7 @@ final class AppState {
             do {
                 try await DocumentStore.shared.saveLibrary(libraryDocuments)
             } catch {
-                logger.error("Failed to persist library: \(error.localizedDescription)")
+                debugLog("Failed to persist library: \(error.localizedDescription)")
             }
         }
     }
@@ -404,7 +422,11 @@ final class AppState {
     // MARK: - Examination
 
     func startExamination() async {
-        guard let document, let analysis else { return }
+        guard let document, let analysis else {
+            debugLog("startExamination: document or analysis is nil, returning")
+            return
+        }
+        debugLog("startExamination: starting with document")
 
         let sessionState = ExaminationSessionState()
         examinationState = sessionState
@@ -446,9 +468,11 @@ final class AppState {
             currentPhase = .complete
             selectedSection = .results
         } catch let appError as AppError {
+            debugLog("startExamination error: \(appError.localizedDescription)")
             presentError(appError)
             currentPhase = .idle
         } catch {
+            debugLog("startExamination unexpected error: \(error.localizedDescription)")
             presentError(.examinationInterrupted(reason: error.localizedDescription))
             currentPhase = .idle
         }
@@ -456,7 +480,11 @@ final class AppState {
 
     /// Starts a conversational Socratic examination using the current document.
     func startConversation() async {
-        guard let document, let analysis else { return }
+        guard let document, let analysis else {
+            debugLog("startConversation: document or analysis is nil, returning")
+            return
+        }
+        debugLog("startConversation: starting with document")
 
         let sessionState = ExaminationSessionState()
         examinationState = sessionState
@@ -491,7 +519,9 @@ final class AppState {
         currentPhase = .examining
 
         do {
+            debugLog("calling engine.startConversation()")
             try await engine.startConversation()
+            debugLog("engine.startConversation() completed")
             let summary = await engine.buildDialogueSummary()
             dialogueSummary = summary
             examSummary = summary.asLegacySummary()
@@ -499,9 +529,11 @@ final class AppState {
             currentPhase = .complete
             selectedSection = .results
         } catch let appError as AppError {
+            debugLog("startConversation AppError: \(appError.localizedDescription)")
             presentError(appError)
             currentPhase = .idle
         } catch {
+            debugLog("startConversation error: \(error.localizedDescription)")
             presentError(.examinationInterrupted(reason: error.localizedDescription))
             currentPhase = .idle
         }
@@ -509,6 +541,7 @@ final class AppState {
 
     /// Starts a conversational examination from a pre-built clinical case.
     func startCaseExamination(_ clinicalCase: ClinicalCase) async {
+        debugLog("startCaseExamination: \(clinicalCase.title)")
         let caseAnalysis = clinicalCase.toAnalysis()
         let caseParsedDoc = ParsedDocument(
             text: clinicalCase.clinicalVignette,

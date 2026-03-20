@@ -72,9 +72,12 @@ actor AppleSpeechSTTService: STTService {
             tearDown()
         }
 
-        // Step 1: Stop any other audio engine that might hold the mic
+        // Step 1: Stop any other audio engine that might hold the audio device
         if let pipeline = audioPipeline {
             await pipeline.stopCapture()
+            await pipeline.stopPlayback()
+            // Give CoreAudio time to fully release the audio device
+            try? await Task.sleep(for: .milliseconds(300))
             logger.info("Stopped AudioPipeline before STT capture")
         }
 

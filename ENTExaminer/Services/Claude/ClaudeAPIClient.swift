@@ -117,6 +117,7 @@ struct ClaudeAPIClient: Sendable {
                     )
 
                     let body = try JSONEncoder().encode(request)
+                    NSLog("[ClaudeAPI] Streaming request to model: %@", model.rawValue)
 
                     let events = sseClient.stream(
                         url: baseURL.appendingPathComponent("messages"),
@@ -134,6 +135,7 @@ struct ClaudeAPIClient: Sendable {
 
                     continuation.finish()
                 } catch {
+                    NSLog("[ClaudeAPI] STREAM ERROR: %@", "\(error)")
                     if !Task.isCancelled {
                         continuation.finish(throwing: error)
                     }
