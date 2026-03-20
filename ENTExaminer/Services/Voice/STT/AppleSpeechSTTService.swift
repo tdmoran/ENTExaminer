@@ -234,8 +234,50 @@ actor AppleSpeechSTTService: STTService {
         self.recognitionRequest = request
         self.isCurrentlyListening = true
 
+        // Install input tap BEFORE starting recognition so audio is flowing
+        // when the recognizer begins. This prevents "No speech detected" errors.
+        inputNode.installTap(
+            onBus: 0,
+            bufferSize: 1024,
+            format: nativeFormat
+        ) { buffer, _ in
+            // Feed buffer to speech recognizer (thread-safe per Apple docs)
+            request.append(buffer)
+
+            // Compute audio level (lightweight vDSP operation, safe on audio thread)
+            let level = EnergyVAD.computeNormalizedLevel(buffer)
+            onAudioLevel(level)
+
+            // Dispatch VAD check off the real-time thread
+            let bufferCopy = Self.copyBuffer(buffer)
+            Task { [weak self] in
+                guard let self else { return }
+                let vadResult = await self.processVADBuffer(bufferCopy)
+
+                if case .silenceTimeout = vadResult {
+                    logger.debug("VAD silence timeout — ending recognition")
+                    await self.finishRecognitionTask()
+                }
+            }
+        }
+
+        // Start the audio engine BEFORE the recognition task
+        engine.prepare()
+        do {
+            try engine.start()
+            logger.info("Audio engine started for speech recognition")
+        } catch {
+            inputNode.removeTap(onBus: 0)
+            self.isCurrentlyListening = false
+            self.audioEngine = nil
+            self.recognitionRequest = nil
+            throw AppError.audioEngineFailure(
+                "Failed to start audio engine: \(error.localizedDescription)"
+            )
+        }
+
+        // Now start recognition — audio is already flowing
         return try await withCheckedThrowingContinuation { continuation in
-            // Start the recognition task
             let task = recognizer.recognitionTask(with: request) { result, error in
                 if let result {
                     let text = result.bestTranscription.formattedString
@@ -270,58 +312,17 @@ actor AppleSpeechSTTService: STTService {
             }
 
             self.recognitionTask = task
-
-            // Install input tap — this closure runs on the real-time audio thread.
-            // We do minimal work: append buffer to the request and compute level.
-            // VAD processing is dispatched off the audio thread.
-            inputNode.installTap(
-                onBus: 0,
-                bufferSize: 1024,
-                format: nativeFormat
-            ) { [weak task] buffer, _ in
-                // Feed buffer to speech recognizer (thread-safe per Apple docs)
-                request.append(buffer)
-
-                // Compute audio level (lightweight vDSP operation, safe on audio thread)
-                let level = EnergyVAD.computeNormalizedLevel(buffer)
-                onAudioLevel(level)
-
-                // Dispatch VAD check off the real-time thread
-                let bufferCopy = Self.copyBuffer(buffer)
-                Task { [weak self] in
-                    guard let self else { return }
-                    let vadResult = await self.processVADBuffer(bufferCopy)
-
-                    if case .silenceTimeout = vadResult {
-                        logger.debug("VAD silence timeout — ending recognition")
-                        task?.finish()
-                    }
-                }
-            }
-
-            // Start the audio engine
-            engine.prepare()
-            do {
-                try engine.start()
-                logger.info("Audio engine started for speech recognition")
-            } catch {
-                inputNode.removeTap(onBus: 0)
-                self.isCurrentlyListening = false
-                self.audioEngine = nil
-                self.recognitionRequest = nil
-                transcriptHolder.fail(
-                    with: continuation,
-                    error: AppError.audioEngineFailure(
-                        "Failed to start audio engine: \(error.localizedDescription)"
-                    )
-                )
-            }
         }
     }
 
     /// Process a buffer through the VAD on the actor's executor (off the audio thread).
     private func processVADBuffer(_ buffer: AVAudioPCMBuffer) -> VADResult {
         vad.processBuffer(buffer)
+    }
+
+    /// Finish the current recognition task (called from VAD when silence timeout is reached).
+    private func finishRecognitionTask() {
+        recognitionTask?.finish()
     }
 
     // MARK: - Cleanup

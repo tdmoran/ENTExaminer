@@ -12,6 +12,22 @@ struct OnboardingView: View {
 
     var body: some View {
         VStack(spacing: 0) {
+            // Close button
+            HStack {
+                Spacer()
+                Button {
+                    appState.showOnboarding = false
+                    dismiss()
+                } label: {
+                    Image(systemName: "xmark.circle.fill")
+                        .font(.title2)
+                        .symbolRenderingMode(.hierarchical)
+                        .foregroundStyle(.secondary)
+                }
+                .buttonStyle(.plain)
+                .padding(12)
+            }
+
             // Content
             Group {
                 switch step {
@@ -185,6 +201,7 @@ struct OnboardingView: View {
                 Spacer()
 
                 Button("Start Examining") {
+                    appState.showOnboarding = false
                     dismiss()
                 }
                 .buttonStyle(.borderedProminent)

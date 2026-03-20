@@ -2,28 +2,42 @@ import SwiftUI
 
 struct SettingsView: View {
     @Environment(AppState.self) private var appState
+    @Environment(\.dismiss) private var dismiss
 
     var body: some View {
         @Bindable var state = appState
 
-        TabView {
-            GeneralSettingsView()
-                .environment(appState)
-                .tabItem {
-                    Label("General", systemImage: "gear")
+        VStack(spacing: 0) {
+            // Close button bar
+            HStack {
+                Spacer()
+                Button("Done") {
+                    appState.showSettings = false
+                    dismiss()
                 }
+                .keyboardShortcut(.defaultAction)
+                .padding(12)
+            }
 
-            APIKeysSettingsView()
-                .tabItem {
-                    Label("API Keys", systemImage: "key.fill")
-                }
+            TabView {
+                GeneralSettingsView()
+                    .environment(appState)
+                    .tabItem {
+                        Label("General", systemImage: "gear")
+                    }
 
-            VoiceSettingsView()
-                .tabItem {
-                    Label("Voice", systemImage: "waveform")
-                }
+                APIKeysSettingsView()
+                    .tabItem {
+                        Label("API Keys", systemImage: "key.fill")
+                    }
+
+                VoiceSettingsView()
+                    .tabItem {
+                        Label("Voice", systemImage: "waveform")
+                    }
+            }
         }
-        .frame(width: 480, height: 360)
+        .frame(width: 480, height: 400)
     }
 }
 
