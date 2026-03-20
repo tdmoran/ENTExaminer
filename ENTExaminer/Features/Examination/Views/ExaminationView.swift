@@ -30,6 +30,9 @@ struct ExaminationView: View {
 
     private var conversationalPanel: some View {
         VStack(spacing: 0) {
+            // Document context header
+            documentContextHeader
+
             // Topic indicator bar
             topicBar
 
@@ -44,6 +47,32 @@ struct ExaminationView: View {
             // Controls
             controlBar
         }
+    }
+
+    private var documentContextHeader: some View {
+        Group {
+            if let doc = appState.selectedLibraryDocument {
+                documentBanner(title: doc.title, icon: doc.formatIcon)
+            } else if let docTitle = appState.document?.metadata.title {
+                documentBanner(title: docTitle, icon: "doc.text.fill")
+            }
+        }
+    }
+
+    private func documentBanner(title: String, icon: String) -> some View {
+        HStack(spacing: 8) {
+            Image(systemName: icon)
+                .foregroundStyle(Color.accentColor)
+                .font(.caption)
+            Text("Examining: \(title)")
+                .font(.caption)
+                .fontWeight(.medium)
+                .lineLimit(1)
+            Spacer()
+        }
+        .padding(.horizontal, 16)
+        .padding(.vertical, 6)
+        .background(Color.accentColor.opacity(0.06))
     }
 
     private var topicBar: some View {
@@ -345,8 +374,10 @@ struct ExaminationView: View {
 
     private var legacyVoiceInteractionPanel: some View {
         VStack(spacing: 20) {
+            documentContextHeader
+
             VStack(spacing: 8) {
-                Label("ENTExaminer", systemImage: "person.wave.2.fill")
+                Label("Examiner", systemImage: "person.wave.2.fill")
                     .font(.caption)
                     .foregroundStyle(.secondary)
 

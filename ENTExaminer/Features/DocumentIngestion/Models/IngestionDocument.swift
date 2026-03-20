@@ -1,7 +1,7 @@
 import Foundation
 import UniformTypeIdentifiers
 
-enum DocumentFormat: String, Sendable, CaseIterable {
+enum DocumentFormat: String, Sendable, CaseIterable, Codable {
     case pdf
     case docx
     case plainText

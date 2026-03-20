@@ -159,10 +159,45 @@ enum PreviewData {
         contentHash: "abc123"
     )
 
+    static let sampleLibraryDocuments: [LibraryDocument] = [
+        LibraryDocument(
+            title: "ENT Clinical Examination Guide",
+            sourceFileName: "sample1.pdf",
+            format: .pdf,
+            fileSize: 2_450_000,
+            pageCount: 42,
+            tags: ["ENT", "clinical", "otology"],
+            isPreloaded: true,
+            lastExaminedDate: Date().addingTimeInterval(-86400),
+            examCount: 3,
+            contentPreview: "Chapter 1: Otology. The ear is divided into three parts..."
+        ),
+        LibraryDocument(
+            title: "Machine Learning Fundamentals",
+            sourceFileName: "sample2.pdf",
+            format: .pdf,
+            fileSize: 1_200_000,
+            pageCount: 28,
+            tags: ["ML", "AI", "neural networks"],
+            examCount: 0,
+            contentPreview: "Introduction to supervised and unsupervised learning..."
+        ),
+        LibraryDocument(
+            title: "Constitutional Law Notes",
+            sourceFileName: "sample3.txt",
+            format: .plainText,
+            fileSize: 85_000,
+            tags: ["law", "constitution"],
+            lastExaminedDate: Date().addingTimeInterval(-172800),
+            examCount: 1,
+            contentPreview: "The separation of powers doctrine..."
+        ),
+    ]
+
     @MainActor
     static func makePreviewAppState(
         phase: AppPhase = .idle,
-        section: AppSection = .documents,
+        section: AppSection = .library,
         withDocument: Bool = false,
         withAnalysis: Bool = false,
         withExamination: Bool = false,
@@ -172,6 +207,7 @@ enum PreviewData {
         state.currentPhase = phase
         state.selectedSection = section
         state.showOnboarding = false
+        state.libraryDocuments = sampleLibraryDocuments
 
         if withDocument {
             state.document = sampleDocument

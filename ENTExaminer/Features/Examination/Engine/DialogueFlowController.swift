@@ -92,12 +92,12 @@ struct DialogueFlowController: Sendable {
         return NextMove(
             intent: .openTopic(firstTopic),
             promptGuidance: """
-                Open the conversation naturally. You're a senior consultant about to discuss \
+                Open the conversation naturally. You're an experienced examiner about to discuss \
                 "\(firstTopic.name)" with a trainee. Don't jump straight into a question — \
-                set the scene briefly using a clinical scenario, then invite \
+                set the scene briefly with a scenario or context, then invite \
                 the trainee to share their thoughts. Keep it warm and collegial.
 
-                Start the scenario with something like: "\(scenarioStarter)"
+                Start with something like: "\(scenarioStarter)"
 
                 Topic: \(firstTopic.name)
                 Key concepts: \(firstTopic.keyConcepts.joined(separator: ", "))
@@ -532,11 +532,11 @@ struct DialogueFlowController: Sendable {
 
     private var openingScenarioStarters: [String] {
         [
-            "Imagine a patient walks into your clinic...",
-            "You're on call and get referred a patient with...",
-            "A GP sends you a referral letter about...",
-            "You're reviewing a case in the MDT meeting...",
-            "During your outpatient clinic, you see...",
+            "Let's start with something practical...",
+            "Imagine you're presented with a situation involving...",
+            "Let me set the scene for you...",
+            "Picture this scenario...",
+            "Let's say someone asks you about...",
         ]
     }
 
@@ -545,11 +545,11 @@ struct DialogueFlowController: Sendable {
             """
             ask a follow-up that probes their understanding from a different angle. \
             Use their own words where possible — "You mentioned X, can you tell me more \
-            about how that works?" or "Good point about X — what would you do differently if...?"
+            about how that works?" or "Good point about X — what would change if...?"
             """,
             """
-            present a clinical case that tests the concept they just described. \
-            "Let me give you a scenario — a 45-year-old presents with..." \
+            present a practical scenario that tests the concept they just described. \
+            "Let me give you a scenario..." \
             See if they can apply what they just explained.
             """,
             """
@@ -559,8 +559,8 @@ struct DialogueFlowController: Sendable {
             """,
             """
             pose a hypothetical variation on what they just discussed. \
-            "What if the patient also had..." or "And what would you do differently \
-            if the presentation was slightly different — say..."
+            "What if the situation also involved..." or "And what would change \
+            if the context was slightly different — say..."
             """,
         ]
     }

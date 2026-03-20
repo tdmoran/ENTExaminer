@@ -33,11 +33,11 @@ struct CaseBankView: View {
                 .font(.system(size: 40))
                 .foregroundStyle(.blue)
 
-            Text("ENT Case Bank")
+            Text("Sample Cases")
                 .font(.largeTitle)
                 .fontWeight(.bold)
 
-            Text("FRCS-style clinical scenarios for viva practice")
+            Text("Pre-loaded clinical scenarios to try out the examiner")
                 .font(.callout)
                 .foregroundStyle(.secondary)
         }

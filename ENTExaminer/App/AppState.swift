@@ -1,21 +1,30 @@
 import Foundation
 import SwiftUI
+import OSLog
+
+private let logger = Logger(subsystem: "com.examiner", category: "AppState")
 
 @MainActor
 @Observable
 final class AppState {
     var currentPhase: AppPhase = .idle
-    var selectedSection: AppSection = .documents
+    var selectedSection: AppSection = .library
+    var error: AppError?
+    var showError: Bool = false
+    var showSettings: Bool = false
+    var showOnboarding: Bool = false
+
+    // Document library
+    var libraryDocuments: [LibraryDocument] = []
+    var selectedLibraryDocument: LibraryDocument?
+
+    // Current examination context
     var document: ParsedDocument?
     var analysis: DocumentAnalysis?
     var examinationState: ExaminationSessionState?
     var examSummary: ExamSummary?
     var dialogueSummary: DialogueSummary?
     var selectedCase: ClinicalCase?
-    var error: AppError?
-    var showError: Bool = false
-    var showSettings: Bool = false
-    var showOnboarding: Bool = false
 
     // Settings
     var selectedModel: ClaudeModel = .haiku
@@ -34,10 +43,243 @@ final class AppState {
             if !hasAnthropicKey || !hasElevenLabsKey {
                 showOnboarding = true
             }
+
+            // Load persisted library
+            await loadLibrary()
         }
     }
 
-    // MARK: - Document Ingestion
+    // MARK: - Library Management
+
+    private func loadLibrary() async {
+        do {
+            let docs = try await DocumentStore.shared.loadLibrary()
+            libraryDocuments = docs
+            logger.info("Loaded \(docs.count) documents from library")
+        } catch {
+            logger.warning("Failed to load library: \(error.localizedDescription)")
+            libraryDocuments = []
+        }
+    }
+
+    private func persistLibrary() {
+        Task {
+            do {
+                try await DocumentStore.shared.saveLibrary(libraryDocuments)
+            } catch {
+                logger.error("Failed to persist library: \(error.localizedDescription)")
+            }
+        }
+    }
+
+    /// Imports a document from a file URL into the library.
+    func importDocument(from url: URL) async {
+        currentPhase = .ingesting(progress: 0.2)
+        error = nil
+
+        do {
+            // Parse the document content
+            let parsed = try await documentParser.parse(url: url)
+            currentPhase = .ingesting(progress: 0.6)
+
+            // Import file into library storage
+            let docId = UUID()
+            let storedName = try await DocumentStore.shared.importFile(from: url, documentId: docId)
+            currentPhase = .ingesting(progress: 0.9)
+
+            let title = parsed.metadata.title ?? url.deletingPathExtension().lastPathComponent
+            let preview = String(parsed.text.prefix(500))
+
+            let libraryDoc = LibraryDocument(
+                id: docId,
+                title: title,
+                sourceFileName: storedName,
+                format: parsed.metadata.format,
+                fileSize: parsed.metadata.fileSize,
+                pageCount: parsed.metadata.pageCount,
+                addedDate: Date(),
+                contentPreview: preview
+            )
+
+            libraryDocuments = libraryDocuments + [libraryDoc]
+            persistLibrary()
+
+            currentPhase = .idle
+            logger.info("Imported document: \(title)")
+        } catch let appError as AppError {
+            presentError(appError)
+            currentPhase = .idle
+        } catch {
+            presentError(.parseFailure(error.localizedDescription))
+            currentPhase = .idle
+        }
+    }
+
+    /// Selects a library document for examination.
+    func selectAndExamine(_ libraryDoc: LibraryDocument) async {
+        selectedLibraryDocument = libraryDoc
+        currentPhase = .ingesting(progress: 0.3)
+
+        do {
+            // Load and parse the file from the store
+            let fileURL = await DocumentStore.shared.fileURL(for: libraryDoc)
+            let parsed = try await documentParser.parse(url: fileURL)
+            document = parsed
+            currentPhase = .ingesting(progress: 0.7)
+
+            // Auto-analyze
+            currentPhase = .analyzing
+            let client = makeClaudeClient()
+            let analyzer = DocumentAnalyzer(client: client)
+            documentAnalyzer = analyzer
+            let result = try await analyzer.analyze(document: parsed, model: selectedModel)
+            analysis = result
+
+            currentPhase = .idle
+            selectedSection = .documentDetail
+        } catch let appError as AppError {
+            presentError(appError)
+            currentPhase = .idle
+        } catch {
+            presentError(.apiResponseInvalid(detail: error.localizedDescription))
+            currentPhase = .idle
+        }
+    }
+
+    /// Archives a document (moves to archive folder).
+    func archiveDocument(_ libraryDoc: LibraryDocument) async {
+        do {
+            try await DocumentStore.shared.archiveFile(for: libraryDoc)
+
+            libraryDocuments = libraryDocuments.map { doc in
+                doc.id == libraryDoc.id ? doc.withArchiveStatus(true) : doc
+            }
+            persistLibrary()
+        } catch {
+            presentError(.parseFailure("Failed to archive: \(error.localizedDescription)"))
+        }
+    }
+
+    /// Restores a document from archive.
+    func restoreDocument(_ libraryDoc: LibraryDocument) async {
+        do {
+            try await DocumentStore.shared.restoreFile(for: libraryDoc)
+
+            libraryDocuments = libraryDocuments.map { doc in
+                doc.id == libraryDoc.id ? doc.withArchiveStatus(false) : doc
+            }
+            persistLibrary()
+        } catch {
+            presentError(.parseFailure("Failed to restore: \(error.localizedDescription)"))
+        }
+    }
+
+    /// Permanently deletes a document.
+    func deleteDocument(_ libraryDoc: LibraryDocument) async {
+        do {
+            try await DocumentStore.shared.deleteFile(for: libraryDoc)
+            libraryDocuments = libraryDocuments.filter { $0.id != libraryDoc.id }
+            persistLibrary()
+        } catch {
+            presentError(.parseFailure("Failed to delete: \(error.localizedDescription)"))
+        }
+    }
+
+    /// Loads pre-built ENT cases as sample documents into the library.
+    func loadSampleDocuments() async {
+        let cases = CaseBank.allCases
+
+        for clinicalCase in cases {
+            let content = buildCaseContent(clinicalCase)
+            let docId = clinicalCase.id
+
+            let libraryDoc = LibraryDocument(
+                id: docId,
+                title: clinicalCase.title,
+                sourceFileName: "\(docId.uuidString).txt",
+                format: .plainText,
+                fileSize: Int64(content.utf8.count),
+                pageCount: 1,
+                tags: clinicalCase.tags,
+                addedDate: Date(),
+                isPreloaded: true,
+                contentPreview: String(content.prefix(500))
+            )
+
+            // Write content to library storage
+            let fileURL = await DocumentStore.shared.fileURL(for: libraryDoc)
+
+            do {
+                try content.write(to: fileURL, atomically: true, encoding: .utf8)
+            } catch {
+                logger.warning("Failed to write sample case \(clinicalCase.title): \(error.localizedDescription)")
+                continue
+            }
+
+            libraryDocuments = libraryDocuments + [libraryDoc]
+        }
+
+        persistLibrary()
+        logger.info("Loaded \(cases.count) sample documents")
+    }
+
+    private func buildCaseContent(_ clinicalCase: ClinicalCase) -> String {
+        var sections: [String] = []
+        sections.append("# \(clinicalCase.title)")
+        sections.append("")
+        sections.append("## Clinical Vignette")
+        sections.append(clinicalCase.clinicalVignette)
+        sections.append("")
+
+        if !clinicalCase.keyHistoryPoints.isEmpty {
+            sections.append("## Key History Points")
+            for point in clinicalCase.keyHistoryPoints {
+                sections.append("- \(point)")
+            }
+            sections.append("")
+        }
+
+        if !clinicalCase.examinationFindings.isEmpty {
+            sections.append("## Examination Findings")
+            for finding in clinicalCase.examinationFindings {
+                sections.append("- \(finding)")
+            }
+            sections.append("")
+        }
+
+        if !clinicalCase.investigations.isEmpty {
+            sections.append("## Investigations")
+            for investigation in clinicalCase.investigations {
+                sections.append("- \(investigation)")
+            }
+            sections.append("")
+        }
+
+        if !clinicalCase.managementPlan.isEmpty {
+            sections.append("## Management Plan")
+            for step in clinicalCase.managementPlan {
+                sections.append("- \(step)")
+            }
+            sections.append("")
+        }
+
+        if !clinicalCase.criticalPoints.isEmpty {
+            sections.append("## Critical Points")
+            for point in clinicalCase.criticalPoints {
+                sections.append("- \(point)")
+            }
+            sections.append("")
+        }
+
+        if !clinicalCase.teachingNotes.isEmpty {
+            sections.append("## Teaching Notes")
+            sections.append(clinicalCase.teachingNotes)
+        }
+
+        return sections.joined(separator: "\n")
+    }
+
+    // MARK: - Document Ingestion (legacy — still used by drag-and-drop on ContentView)
 
     func loadDocument(from url: URL) async {
         currentPhase = .ingesting(progress: 0.3)
@@ -48,10 +290,9 @@ final class AppState {
             document = parsed
             currentPhase = .ingesting(progress: 1.0)
 
-            // Brief pause to show completion
             try await Task.sleep(for: .milliseconds(300))
             currentPhase = .idle
-            selectedSection = .documents
+            selectedSection = .documentDetail
         } catch let appError as AppError {
             presentError(appError)
             currentPhase = .idle
@@ -126,6 +367,7 @@ final class AppState {
             try await engine.startExamination()
             let summary = await engine.buildSummary()
             examSummary = summary
+            recordExamSession(score: summary.overallScore, topics: summary.topicScores.map(\.topicName), duration: summary.totalDuration)
             currentPhase = .complete
             selectedSection = .results
         } catch let appError as AppError {
@@ -178,6 +420,7 @@ final class AppState {
             let summary = await engine.buildDialogueSummary()
             dialogueSummary = summary
             examSummary = summary.asLegacySummary()
+            recordExamSession(score: summary.overallScore, topics: summary.topicScores.map(\.topicName), duration: summary.totalDuration)
             currentPhase = .complete
             selectedSection = .results
         } catch let appError as AppError {
@@ -246,9 +489,36 @@ final class AppState {
         examSummary = nil
         dialogueSummary = nil
         selectedCase = nil
+        selectedLibraryDocument = nil
         examinationEngine = nil
         currentPhase = .idle
-        selectedSection = .documents
+        selectedSection = .library
+    }
+
+    // MARK: - Exam Session Recording
+
+    private func recordExamSession(score: Double, topics: [String], duration: TimeInterval) {
+        guard let docId = selectedLibraryDocument?.id else { return }
+
+        // Update document exam count
+        libraryDocuments = libraryDocuments.map { doc in
+            doc.id == docId ? doc.withExamRecorded() : doc
+        }
+        persistLibrary()
+
+        // Save session record
+        let record = ExamSessionRecord(
+            id: UUID(),
+            documentId: docId,
+            date: Date(),
+            duration: duration,
+            overallScore: score,
+            topicsCovered: topics,
+            modelUsed: selectedModel.displayName
+        )
+        Task {
+            try? await DocumentStore.shared.addSession(record)
+        }
     }
 
     // MARK: - Helpers
@@ -278,31 +548,39 @@ enum AppPhase: Equatable {
 // MARK: - Sidebar Sections
 
 enum AppSection: String, CaseIterable, Identifiable {
-    case documents
+    case library
+    case documentDetail
     case cases
     case examination
     case results
-    case history
+    case archive
 
     var id: String { rawValue }
 
     var title: String {
         switch self {
-        case .documents: return "Documents"
-        case .cases: return "Case Bank"
+        case .library: return "Library"
+        case .documentDetail: return "Document"
+        case .cases: return "Sample Cases"
         case .examination: return "Examination"
         case .results: return "Results"
-        case .history: return "History"
+        case .archive: return "Archive"
         }
     }
 
     var systemImage: String {
         switch self {
-        case .documents: return "doc.text.fill"
+        case .library: return "books.vertical.fill"
+        case .documentDetail: return "doc.text.magnifyingglass"
         case .cases: return "cross.case.fill"
         case .examination: return "waveform.circle.fill"
         case .results: return "chart.bar.fill"
-        case .history: return "clock.arrow.circlepath"
+        case .archive: return "archivebox.fill"
         }
+    }
+
+    /// Sections shown in the sidebar.
+    static var sidebarSections: [AppSection] {
+        [.library, .cases, .examination, .results, .archive]
     }
 }

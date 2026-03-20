@@ -41,12 +41,12 @@ struct ConversationSummaryView: View {
 private extension ConversationSummaryView {
     var headerSection: some View {
         VStack(spacing: 8) {
-            Image(systemName: "stethoscope")
+            Image(systemName: "text.book.closed.fill")
                 .font(.system(size: 44))
                 .foregroundStyle(Color.accentColor)
                 .symbolEffect(.bounce, value: animateIn)
 
-            Text("Conversation Review")
+            Text("Examination Review")
                 .font(.largeTitle)
                 .fontWeight(.bold)
 
@@ -716,13 +716,13 @@ private extension ConversationSummaryView {
 private extension ConversationSummaryView {
     var actionBar: some View {
         HStack(spacing: 16) {
-            Button("New Examination") {
+            Button("Back to Library") {
                 appState.resetForNewExamination()
             }
             .buttonStyle(.borderedProminent)
             .controlSize(.large)
 
-            Button("Practice Again") {
+            Button("Examine Again") {
                 appState.selectedSection = .examination
             }
             .buttonStyle(.bordered)

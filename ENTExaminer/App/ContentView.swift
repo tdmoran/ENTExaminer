@@ -45,10 +45,24 @@ struct ContentView: View {
     private var detailView: some View {
         Group {
             switch appState.selectedSection {
-            case .documents:
-                DocumentDropView()
+            case .library:
+                DocumentLibraryView()
                     .environment(appState)
-                    .id(AppSection.documents)
+                    .id(AppSection.library)
+            case .documentDetail:
+                if let libraryDoc = appState.selectedLibraryDocument {
+                    DocumentDetailView(document: libraryDoc)
+                        .environment(appState)
+                } else if appState.document != nil {
+                    DocumentDropView()
+                        .environment(appState)
+                } else {
+                    ContentUnavailableView(
+                        "No Document Selected",
+                        systemImage: "doc.text.magnifyingglass",
+                        description: Text("Select a document from your library to view details.")
+                    )
+                }
             case .cases:
                 CaseBankView()
                     .environment(appState)
@@ -61,7 +75,7 @@ struct ContentView: View {
                     ContentUnavailableView(
                         "No Active Examination",
                         systemImage: "waveform.circle",
-                        description: Text("Load a document and start an examination.")
+                        description: Text("Select a document from your library and start an examination.")
                     )
                 }
             case .results:
@@ -78,12 +92,10 @@ struct ContentView: View {
                         description: Text("Complete an examination to see your results.")
                     )
                 }
-            case .history:
-                ContentUnavailableView(
-                    "History",
-                    systemImage: "clock.arrow.circlepath",
-                    description: Text("Past examinations will appear here.")
-                )
+            case .archive:
+                ArchiveView()
+                    .environment(appState)
+                    .id(AppSection.archive)
             }
         }
         .transition(.opacity.animation(.easeInOut(duration: 0.2)))
@@ -133,7 +145,7 @@ struct ContentView: View {
         _ = provider.loadObject(ofClass: URL.self) { url, _ in
             guard let url else { return }
             Task { @MainActor in
-                await appState.loadDocument(from: url)
+                await appState.importDocument(from: url)
             }
         }
 
@@ -156,23 +168,36 @@ struct SidebarView: View {
         @Bindable var state = appState
 
         List(selection: $state.selectedSection) {
-            ForEach(AppSection.allCases) { section in
+            ForEach(AppSection.sidebarSections) { section in
                 Label(section.title, systemImage: section.systemImage)
                     .tag(section)
                     .foregroundStyle(isSectionEnabled(section) ? .primary : .secondary)
+                    .badge(badgeCount(for: section))
             }
         }
         .listStyle(.sidebar)
-        .navigationTitle("ENTExaminer")
+        .navigationTitle("Examiner")
     }
 
     private func isSectionEnabled(_ section: AppSection) -> Bool {
         switch section {
-        case .documents: return true
+        case .library: return true
+        case .documentDetail: return appState.selectedLibraryDocument != nil || appState.document != nil
         case .cases: return true
         case .examination: return appState.examinationState != nil
         case .results: return appState.examSummary != nil || appState.dialogueSummary != nil
-        case .history: return true
+        case .archive: return true
+        }
+    }
+
+    private func badgeCount(for section: AppSection) -> Int {
+        switch section {
+        case .library:
+            return appState.libraryDocuments.filter { !$0.isArchived }.count
+        case .archive:
+            return appState.libraryDocuments.filter(\.isArchived).count
+        default:
+            return 0
         }
     }
 }
@@ -186,7 +211,7 @@ struct ContentView_Previews: PreviewProvider {
             ContentView()
                 .environment(PreviewData.makePreviewAppState())
                 .frame(width: 1000, height: 700)
-                .previewDisplayName("Content View - Documents")
+                .previewDisplayName("Content View - Library")
 
             ContentView()
                 .environment(PreviewData.makePreviewAppState(section: .results, withResults: true))
