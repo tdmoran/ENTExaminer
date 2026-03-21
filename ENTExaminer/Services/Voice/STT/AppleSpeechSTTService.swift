@@ -4,6 +4,22 @@ import Speech
 
 private let logger = Logger(subsystem: "com.entexaminer", category: "AppleSpeechSTT")
 
+private func sttLog(_ message: String) {
+    let url = URL(fileURLWithPath: "/tmp/entexaminer_engine.log")
+    let line = "\(Date()): [STT] \(message)\n"
+    if let data = line.data(using: .utf8) {
+        if FileManager.default.fileExists(atPath: url.path) {
+            if let handle = try? FileHandle(forWritingTo: url) {
+                handle.seekToEndOfFile()
+                handle.write(data)
+                handle.closeFile()
+            }
+        } else {
+            try? data.write(to: url)
+        }
+    }
+}
+
 // MARK: - Apple Speech STT Service
 
 /// A speech-to-text service using Apple's `Speech` framework.
@@ -76,8 +92,9 @@ actor AppleSpeechSTTService: STTService {
         if let pipeline = audioPipeline {
             await pipeline.stopCapture()
             await pipeline.stopPlayback()
-            // Give CoreAudio time to fully release the audio device
-            try? await Task.sleep(for: .milliseconds(300))
+            // CoreAudio needs time to fully release the aggregate device
+            // created by voice processing. 1.5s is conservative but reliable.
+            try? await Task.sleep(for: .milliseconds(1500))
             logger.info("Stopped AudioPipeline before STT capture")
         }
 
@@ -249,7 +266,13 @@ actor AppleSpeechSTTService: STTService {
 
             // Compute audio level (lightweight vDSP operation, safe on audio thread)
             let level = EnergyVAD.computeNormalizedLevel(buffer)
+            let rms = EnergyVAD.computeRMSEnergy(buffer)
             onAudioLevel(level)
+
+            // Log periodically (every ~50 buffers ≈ once per second)
+            if Int.random(in: 0..<50) == 0 {
+                sttLog("audio tap: rms=\(rms), level=\(level), frames=\(buffer.frameLength)")
+            }
 
             // Dispatch VAD check off the real-time thread
             let bufferCopy = Self.copyBuffer(buffer)
@@ -284,8 +307,16 @@ actor AppleSpeechSTTService: STTService {
             let task = recognizer.recognitionTask(with: request) { result, error in
                 if let result {
                     let text = result.bestTranscription.formattedString
-                    transcriptHolder.update(text)
-                    onPartialTranscript(text)
+                    let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines.union(.punctuationCharacters))
+                    sttLog("partial transcript: \(text.prefix(80)), isFinal=\(result.isFinal)")
+
+                    // Only update if the new text is meaningful — when finish()
+                    // is called, Apple sometimes sends a final callback with an
+                    // empty or degraded transcript that would overwrite good text.
+                    if !trimmed.isEmpty {
+                        transcriptHolder.update(text)
+                        onPartialTranscript(text)
+                    }
 
                     if result.isFinal {
                         let finalText = transcriptHolder.current
@@ -295,6 +326,7 @@ actor AppleSpeechSTTService: STTService {
                 }
 
                 if let error {
+                    sttLog("recognition error: \(error.localizedDescription)")
                     // Ignore cancellation errors during teardown
                     let nsError = error as NSError
                     let isCancellation = nsError.domain == "kAFAssistantErrorDomain" && nsError.code == 216

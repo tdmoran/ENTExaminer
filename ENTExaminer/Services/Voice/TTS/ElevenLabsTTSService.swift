@@ -107,7 +107,7 @@ actor ElevenLabsTTSService: TTSService {
             // Play any remaining bytes
             if !accumulatedData.isEmpty, !Task.isCancelled {
                 let finalChunk = accumulatedData
-                try await audioPipeline.playAudioChunk(finalChunk, format: .mp3)
+                try await audioPipeline.playAudioChunk(finalChunk, format: .pcm24kHz)
 
                 let level = Self.estimateAudioLevel(from: finalChunk)
                 onAudioLevel(level)
