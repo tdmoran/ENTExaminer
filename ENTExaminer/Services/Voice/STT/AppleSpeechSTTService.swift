@@ -315,7 +315,8 @@ actor AppleSpeechSTTService: STTService {
                     // empty or degraded transcript that would overwrite good text.
                     if !trimmed.isEmpty {
                         transcriptHolder.update(text)
-                        onPartialTranscript(text)
+                        // Show the full accumulated transcript (not just the current segment)
+                        onPartialTranscript(transcriptHolder.current)
                     }
 
                     if result.isFinal {
@@ -419,20 +420,57 @@ actor AppleSpeechSTTService: STTService {
 
 /// Thread-safe holder for the recognition transcript that ensures the continuation
 /// is resumed exactly once, even if multiple callbacks fire.
+///
+/// Apple's speech recognizer resets its internal buffer during long utterances,
+/// sending a drastically shorter transcript that erases earlier content. This
+/// holder detects resets (>50% length drop) and accumulates segments so the
+/// full answer is preserved across recognizer restarts.
 private final class TranscriptHolder: @unchecked Sendable {
-    private var _current: String = ""
+    private var _committed: String = ""   // Accumulated segments from previous resets
+    private var _pending: String = ""     // Current segment being built
+    private var _pendingPeak: Int = 0     // Peak length of current segment
     private var _hasResumed: Bool = false
     private let lock = NSLock()
 
+    /// The full transcript: committed segments + current pending segment.
     var current: String {
         lock.lock()
         defer { lock.unlock() }
-        return _current
+        let committed = _committed
+        let pending = _pending
+        if committed.isEmpty { return pending }
+        if pending.isEmpty { return committed }
+        return committed + " " + pending
     }
 
     func update(_ text: String) {
         lock.lock()
-        _current = text
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        let newLength = trimmed.count
+
+        if newLength == 0 {
+            // Ignore empty updates
+            lock.unlock()
+            return
+        }
+
+        // Detect a recognizer reset: new text is drastically shorter than the
+        // peak of the current segment. Commit the current segment and start fresh.
+        if _pendingPeak > 20 && newLength < _pendingPeak / 2 {
+            // Commit the current pending segment
+            if !_pending.isEmpty {
+                _committed = _committed.isEmpty
+                    ? _pending
+                    : _committed + " " + _pending
+            }
+            _pending = text
+            _pendingPeak = newLength
+        } else {
+            // Normal update — the recognizer is refining the current segment
+            _pending = text
+            _pendingPeak = max(_pendingPeak, newLength)
+        }
+
         lock.unlock()
     }
 

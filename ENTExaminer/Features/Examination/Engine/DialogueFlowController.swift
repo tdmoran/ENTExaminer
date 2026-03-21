@@ -419,13 +419,13 @@ struct DialogueFlowController: Sendable {
         let totalTopics = analysis.topics.count
 
         // Time-based: approaching target duration
-        if context.totalDuration > Double(15 * 60) { return true }
+        if context.totalDuration > Double(10 * 60) { return true }
 
         // Exchange-based: enough conversation
-        if context.exchangeCount > 25 { return true }
+        if context.exchangeCount > 16 { return true }
 
         // Coverage-based: all topics discussed with reasonable depth
-        if topicsCovered >= totalTopics && context.exchangeCount >= totalTopics * 3 {
+        if topicsCovered >= totalTopics && context.exchangeCount >= totalTopics * 2 {
             return true
         }
 

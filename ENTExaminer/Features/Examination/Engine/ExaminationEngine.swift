@@ -182,6 +182,9 @@ actor ExaminationEngine {
             isConversationalMode: true
         )
 
+        // Speak a brief introduction about the topic before starting Q&A
+        try await speakIntroductionForConversation()
+
         // The examiner opens the conversation
         let openingMove = dialogueFlowController.decideNextMove(
             analysis: analysis,
@@ -197,18 +200,38 @@ actor ExaminationEngine {
             // 1. Listen for trainee's response (with barge-in detection)
             let traineeText = try await listenToTrainee()
 
-            // 2. Record trainee message
+            // 2. Check if trainee wants to end the conversation
+            if isStopRequest(traineeText) {
+                engineLog("Trainee requested stop: \(traineeText.prefix(40))")
+                let closingText = "Grand, we'll leave it there. Well done — good session."
+                let capturedState = state
+                await capturedState.update(currentQuestion: .some(closingText), isSpeaking: true)
+                try await ttsService.speak(
+                    text: closingText,
+                    voiceId: voiceId,
+                    onAudioLevel: { @Sendable level in
+                        Task { @MainActor in
+                            let levels = Self.buildLevelsArray(from: level)
+                            capturedState.update(examinerAudioLevels: levels)
+                        }
+                    }
+                )
+                await capturedState.update(isSpeaking: false)
+                break
+            }
+
+            // 3. Record trainee message
             let traineeMessage = DialogueMessage(role: .trainee, content: traineeText)
             dialogueMessages = dialogueMessages + [traineeMessage]
             await updateDialogueState()
 
-            // 3. Assess the exchange in background (non-blocking)
+            // 4. Assess the exchange in background (non-blocking)
             launchBackgroundAssessment(traineeText: traineeText)
 
-            // 4. Thinking pause — brief natural delay before responding
+            // 5. Thinking pause — brief natural delay before responding
             await showThinkingPause()
 
-            // 5. Decide the examiner's next conversational move
+            // 6. Decide the examiner's next conversational move
             let context = buildConversationContext()
             let responseMove = dialogueFlowController.decideNextMove(
                 analysis: analysis,
@@ -217,7 +240,7 @@ actor ExaminationEngine {
                 assessments: inlineAssessments
             )
 
-            // 6. Speak the response (or close)
+            // 7. Speak the response (or close)
             try await speakExaminerMove(responseMove)
 
             if case .closing = responseMove.intent {
@@ -427,7 +450,7 @@ actor ExaminationEngine {
             model: config.model,
             system: systemPrompt,
             messages: conversationHistory + [guidance],
-            maxTokens: 512
+            maxTokens: 150
         )
     }
 
@@ -729,36 +752,53 @@ actor ExaminationEngine {
         - You use practical scenarios and "what would you do" questions naturally
         - You ground abstract concepts with concrete examples from the document
 
-        CONVERSATION RULES:
-        - This is a DIALOGUE, not an interrogation. Respond to what the trainee actually says.
-        - ALWAYS acknowledge before probing: "That's right..." / "Good point about..." / \
-          "Interesting that you mention..."
-        - If the trainee gives a partial answer, probe the gap: "And what about..." / \
-          "You mentioned X, but what role does Y play?"
-        - If the trainee is wrong, don't say "That's incorrect." Instead: "I see what you \
-          mean, but consider..." or "What if we think about it from the perspective of..."
-        - If they say "I don't know", be supportive: "That's okay — let's think through it. \
-          What do you know about..." or "No worries. Let me put it another way..."
-        - Make topic transitions feel natural, not announced: "You mentioned X earlier, which \
-          actually connects to..." NOT "Let's move on to the next topic."
-        - Keep responses concise (2-4 sentences typically). This is spoken, not written.
-        - Use the trainee's own words when following up — it shows you're listening.
-        - Vary your question style: direct questions, practical scenarios, "what if" hypotheticals, \
-          "talk me through" walkthroughs, comparison questions ("how does X differ from Y?")
-        - If the trainee makes an unexpected but valid connection, explore it even if it \
-          wasn't in your plan.
+        CONVERSATION RULES — BREVITY IS CRITICAL:
+        - YOUR RESPONSES MUST BE 1-2 SENTENCES MAX. Never more. This is a rapid-fire viva.
+        - Your job is to EXTRACT FACTS from the trainee, not to teach during the exam.
+        - Acknowledge briefly ("Good", "Right", "Yes"), then immediately ask the next question.
+        - If they're wrong, correct in ONE sentence, then move on: "Actually it's X. Now, what about Y?"
+        - If they don't know, give a ONE sentence hint and re-ask, or move on.
+        - Ask direct, specific questions that demand factual answers: "What nerve is at risk?" \
+          "Name three causes." "What's the first investigation?"
+        - Do NOT set long clinical scenarios. Get straight to the question.
+        - Do NOT explain or teach at length — save that for after the exam.
+        - Cover ground quickly. If they've answered well, move to the next point immediately.
         - Ask questions based on the DOCUMENT CONTENT, not general knowledge.
 
         SPEECH GUIDELINES:
-        - Use natural spoken English, not formal written English
-        - Contractions are fine: "you've", "that's", "what's"
-        - Filler phrases are okay sparingly: "So...", "Right, so...", "Okay, now..."
-        - Avoid bullet points, numbered lists, or any formatting — this will be spoken aloud
-        - Keep sentences short and clear for speech synthesis
+        - Keep it SHORT. One to two sentences per response, maximum.
+        - Natural spoken English, contractions fine.
+        - No bullet points, lists, or formatting — this is spoken aloud.
         """
     }
 
     // MARK: - Legacy Mode: Private Methods
+
+    /// Speaks a brief 2-3 sentence introduction about the topic and what's about
+    /// to happen, before the conversational examination begins.
+    private func speakIntroductionForConversation() async throws {
+        let topicName = analysis.topics.first?.name ?? "the material"
+        let intro = "Right, today we're covering \(topicName). " +
+            "Structure your answers in clear points, like a real viva. Let's go."
+
+        engineLog("speakIntroductionForConversation: \(intro.prefix(80))")
+        let capturedState = state
+        await capturedState.update(currentQuestion: .some(intro), isSpeaking: true)
+
+        try await ttsService.speak(
+            text: intro,
+            voiceId: voiceId,
+            onAudioLevel: { @Sendable level in
+                Task { @MainActor in
+                    let levels = Self.buildLevelsArray(from: level)
+                    capturedState.update(examinerAudioLevels: levels)
+                }
+            }
+        )
+
+        await capturedState.update(isSpeaking: false)
+        try await Task.sleep(for: .seconds(1))
+    }
 
     private func speakIntroduction() async throws {
         let intro = "Welcome to your examination on \(analysis.documentSummary)."
@@ -994,6 +1034,28 @@ actor ExaminationEngine {
                 await state.update(elapsedTime: elapsed)
             }
         }
+    }
+
+    /// Detects if the trainee is asking to end the examination.
+    /// Only triggers on short utterances that are clearly stop requests,
+    /// not on longer answers that happen to contain words like "stop".
+    private func isStopRequest(_ text: String) -> Bool {
+        let lower = text.lowercased().trimmingCharacters(in: .whitespacesAndNewlines)
+
+        // Only consider short utterances (under 60 chars) as potential stop requests.
+        // A real answer that happens to contain "stop" will be longer.
+        guard lower.count < 60 else { return false }
+
+        let exactPhrases = [
+            "stop", "stop please", "let's stop", "let's stop here",
+            "that's enough", "wrap up", "let's wrap up",
+            "finish", "let's finish", "i'm done", "done",
+            "that's it", "we can stop", "can we stop",
+            "i'd like to stop", "i want to stop", "leave it there",
+            "thanks that's all", "thank you that's all",
+            "end the exam", "end the examination"
+        ]
+        return exactPhrases.contains(where: { lower == $0 || lower.hasPrefix($0 + " ") || lower.hasSuffix(" " + $0) })
     }
 
     static func buildLevelsArray(from level: Float) -> [Float] {
